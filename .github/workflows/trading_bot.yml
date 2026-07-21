@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# GitHub Actions workflow dosyasını oluştur
+mkdir -p /home/ubuntu/eth_bot_repo/.github/workflows
+
+cat > /home/ubuntu/eth_bot_repo/.github/workflows/trading_bot.yml << 'WORKFLOWEOF'
+name: ETH Trading Bot
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Her 15 dakikada çalış
+  workflow_dispatch:
+
+jobs:
+  trading:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install ccxt pandas numpy ta python-telegram-bot requests
+      
+      - name: Run trading bot
+        env:
+          BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
+          BYBIT_SECRET_KEY: ${{ secrets.BYBIT_SECRET_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py
+WORKFLOWEOF
+
+# Bot dosyasını kopyala
+cp /home/ubuntu/eth_trading_bot_production.py /home/ubuntu/eth_bot_repo/bot.py
+
+# README oluştur
+cat > /home/ubuntu/eth_bot_repo/README.md << 'READMEEOF'
+# ETH Trading Bot - GitHub Actions
+
+Bu bot Bybit'ten ETH/USDT 15m MACD sinyallerini alıp Telegram'a gönderiyor.
+
+## Setup
+
+1. GitHub'a push et
+2. Settings → Secrets and variables → Actions
+3. Şu secrets'ları ekle:
+   - BYBIT_API_KEY
+   - BYBIT_SECRET_KEY
+   - TELEGRAM_TOKEN
+   - TELEGRAM_CHAT_ID
+
+4. Actions tab'ında workflow'u etkinleştir
+
+Bot her 15 dakikada otomatik çalışacak!
+READMEEOF
+
+echo "✅ GitHub Actions setup dosyaları oluşturuldu"
+echo "📁 Konum: /home/ubuntu/eth_bot_repo/"
+echo ""
+echo "Sonraki adımlar:"
+echo "1. GitHub'a gir: https://github.com/new"
+echo "2. Repository oluştur: eth-trading-bot"
+echo "3. Dosyaları push et"
+echo "4. Settings → Secrets ekle"
+echo "5. Actions etkinleştir"
+
