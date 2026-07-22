@@ -1,4 +1,4 @@
-name: ETH Trading Bot - Final
+name: ETH + BTC Trading Bot
 
 on:
   schedule:
@@ -14,10 +14,10 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install ccxt pandas python-telegram-bot
-      - name: Run Bot Final
+      - name: Run Dual Bot (ETH + BTC)
         env:
           BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
           BYBIT_SECRET_KEY: ${{ secrets.BYBIT_SECRET_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: timeout 900 python eth_trading_bot_final.py || true
+        run: timeout 900 python eth_btc_trading_bot.py || true
