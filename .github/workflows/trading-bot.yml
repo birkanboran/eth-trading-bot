@@ -1,4 +1,4 @@
-name: ETH Trading Bot - Swing 5x Strategy
+name: ETH Trading Bot - Swing 5x (FIXED)
 
 on:
   schedule:
@@ -22,11 +22,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install ccxt pandas numpy python-telegram-bot requests
       
-      - name: Run Trading Bot (Swing 5x)
+      - name: Run Trading Bot (Swing 5x - FIXED)
         env:
           BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
           BYBIT_SECRET_KEY: ${{ secrets.BYBIT_SECRET_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          timeout 900 python eth_trading_bot_swing_5x.py || true
+          timeout 900 python eth_trading_bot_fixed.py || true
