@@ -1,4 +1,4 @@
-name: ETH Trading Bot V3 - State Machine
+name: ETH Trading Bot - Production
 
 on:
   schedule:
@@ -13,12 +13,11 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - run: |
-          pip install ccxt pandas python-telegram-bot
-      - name: Run Bot V3
+      - run: pip install ccxt pandas python-telegram-bot
+      - name: Run Bot
         env:
           BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
           BYBIT_SECRET_KEY: ${{ secrets.BYBIT_SECRET_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: timeout 900 python eth_trading_bot_v3.py || true
+        run: timeout 900 python eth_trading_bot_production.py || true
