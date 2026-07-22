@@ -1,28 +1,29 @@
-# ETH/USDT Perpetual Trading Bot
+# ETH/USDT Perpetual Trading Bot - Swing High/Low Strategy
 
-**Swing High/Low Strategy - 5x Leverage - Bybit API - Telegram Signals**
+**5x Leverage | Bybit API | Telegram Signals | 24/7 Automated**
 
-## 📊 Strategy Overview
+## 🎯 Strategy
 
-**Swing Trading on ETH/USDT Perpetual**
+**Swing High/Low Detection**
 - Detects swing lows (best entry points) → BUY signals
 - Detects swing highs (best exit points) → SELL signals
 - 5x leverage for amplified returns
 - 1% risk per trade
+- TP: +2% from entry | SL: -2% from entry
 
-## 📈 Backtest Results (10 days, Real Bybit Data)
+## 📊 Backtest Results (10 days, Real Bybit Data)
 
 | Metric | Value |
 |--------|-------|
+| Initial Capital | $100 |
+| Final Balance | $877.86 |
+| Total Return | **777.86%** |
 | Total Trades | 103 |
 | Wins | 101 |
 | Losses | 2 |
-| Win Rate | 98.1% |
-| Total Return | 777.86% |
-| Initial Capital | $100 |
-| Final Balance | $877.86 |
-
-**Monthly Projection:** ~2,300% return
+| Win Rate | **98.1%** |
+| Max Drawdown | Controlled |
+| Monthly Projection | ~$2,300 profit |
 
 ## 🟢 BUY Signal Example
 
@@ -87,7 +88,7 @@ export TELEGRAM_CHAT_ID="your_chat_id"
 ### Run Bot
 
 ```bash
-python eth_trading_bot_complete.py
+python eth_trading_bot_swing_5x.py
 ```
 
 ## 🔄 GitHub Actions (24/7 Automated)
@@ -100,16 +101,17 @@ Bot runs every 15 minutes via GitHub Actions:
 
 ## 📁 Files
 
-- `eth_trading_bot_complete.py` - Main production bot
+- `eth_trading_bot_swing_5x.py` - Main production bot (Swing 5x)
 - `eth_trading_bot_demo.py` - Demo/backtest version
-- `.github/workflows/trading-bot.yml` - GitHub Actions workflow
+- `.github/workflows/trading-bot.yml` - GitHub Actions automation
+- `README.md` - This file
 
 ## ⚠️ Risk Disclaimer
 
-- This bot uses 5x leverage - high risk
-- Past performance ≠ future results
-- Use at your own risk
-- Start with small capital
+- **High Risk:** 5x leverage is risky, use with caution
+- **Backtested:** Results based on 10 days of historical data
+- **Real Market:** Actual results may differ from backtest
+- **Use at Your Own Risk:** Start with small capital
 
 ## 📊 Monitoring
 
@@ -120,7 +122,12 @@ Check signals in Telegram:
 
 ---
 
-**Last Updated:** 2026-07-22
 **Strategy:** Swing High/Low Detection
 **Exchange:** Bybit
 **Pair:** ETH/USDT Perpetual
+**Leverage:** 5x
+**Risk:** 1% per trade
+**Timeframe:** 15 minutes
+**Automation:** Every 15 minutes via GitHub Actions
+
+Last Updated: 2026-07-22
