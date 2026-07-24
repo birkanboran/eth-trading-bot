@@ -16,7 +16,7 @@ exchange = ccxt.bybit({
 })
 
 state_file = '/home/ubuntu/bot_state.json'
-balance = 100
+balance = 95.99  # ACTUAL BALANCE
 daily_pnl = 0
 positions = {}
 
@@ -26,7 +26,7 @@ def load_state():
         if os.path.exists(state_file):
             with open(state_file) as f:
                 data = json.load(f)
-                balance = data.get('balance', 100)
+                balance = data.get('balance', 95.99)
                 daily_pnl = data.get('daily_pnl', 0)
                 positions = data.get('positions', {})
     except:
@@ -156,7 +156,7 @@ ${current:.2f}
 Hedef (TP)
 ${tp:.2f}
 
-Zarar Durdurma (SL)
+Zaraf Durdurma (SL)
 ${sl:.2f}
 
 Pozisyon Boyutu
