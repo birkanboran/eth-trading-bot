@@ -1,0 +1,19 @@
+name: Smart Money Bot
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - run: pip install ccxt pandas python-telegram-bot
+      - name: Run Smart Money Bot
+        run: timeout 300 python smart_money_bot_final.py || true
