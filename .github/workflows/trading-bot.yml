@@ -1,4 +1,4 @@
-name: Complete Trading Bot
+name: Working Trading Bot
 
 on:
   schedule:
@@ -14,10 +14,10 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install ccxt pandas python-telegram-bot
-      - name: Run Complete Bot
+      - name: Run Working Bot
         env:
           BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
           BYBIT_SECRET_KEY: ${{ secrets.BYBIT_SECRET_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: timeout 900 python eth_btc_bot_complete.py || true
+        run: timeout 900 python eth_btc_bot_working.py || true
