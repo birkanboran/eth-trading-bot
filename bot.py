@@ -1,25 +1,22 @@
 #!/usr/bin/env python3
 """
-Bybit ETH/BTC Perpetual Futures Trading Bot - BYBIT REST API VERSION
+Bybit ETH/BTC Perpetual Futures Trading Bot - PyBit SDK VERSION
 Strategy: Volume Spike Detection
-Direct REST API calls for reliable order placement
+Using official PyBit SDK for reliable order placement
 """
 import requests
 import json
 import os
 import sys
 import time
-import hmac
-import hashlib
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode
+from pybit.unified_trading import HTTP
 
 # ============ CONFIGURATION ============
-API_KEY = "mUTJK74gQTJ6Tp67z6"
-SECRET_KEY = "k3ulpN87Kjm7iiGqvZAYKF5V4TQDDGdLot3K"
+API_KEY = "docc2UOm7uWWp17Q1c"
+SECRET_KEY = "ORGVyaQPk1BvVFrOEaEXGsWgXIlYiLAxO47B"
 TELEGRAM_TOKEN = '8993995766:AAGxfrHRnL-9VxBUjOJXA__9BaAVMgD4ndU'
 CHAT_ID = '851788804'
-BYBIT_API_URL = "https://api.bybit.com/v5"
 
 # Trading parameters
 LEVERAGE = 5
@@ -31,6 +28,13 @@ VOLUME_PERIOD = 50
 
 # State file
 STATE_FILE = '/tmp/bot_state.json'
+
+# Initialize Bybit session
+session = HTTP(
+    testnet=False,
+    api_key=API_KEY,
+    api_secret=SECRET_KEY,
+)
 
 # Global state
 balance = 95.99
@@ -87,107 +91,48 @@ def send_telegram(msg):
         print(f"❌ Telegram error: {e}")
 
 # ============ BYBIT API ============
-def get_bybit_signature(payload, secret):
-    """Generate Bybit API signature"""
-    return hmac.new(
-        secret.encode(),
-        payload.encode(),
-        hashlib.sha256
-    ).hexdigest()
-
-def bybit_request(method, endpoint, params=None):
-    """Make Bybit API request"""
-    try:
-        timestamp = str(int(time.time() * 1000))
-        
-        if method == "GET":
-            query_string = urlencode(params) if params else ""
-            payload = f"GET{endpoint}?{query_string}{timestamp}{API_KEY}"
-            signature = get_bybit_signature(payload, SECRET_KEY)
-            
-            url = f"{BYBIT_API_URL}{endpoint}"
-            if query_string:
-                url += f"?{query_string}"
-            
-            headers = {
-                "X-BAPI-KEY": API_KEY,
-                "X-BAPI-SIGN": signature,
-                "X-BAPI-TIMESTAMP": timestamp,
-                "Content-Type": "application/json"
-            }
-            
-            response = requests.get(url, headers=headers, timeout=10)
-        
-        else:  # POST
-            body = json.dumps(params) if params else "{}"
-            payload = f"POST{endpoint}{body}{timestamp}{API_KEY}"
-            signature = get_bybit_signature(payload, SECRET_KEY)
-            
-            url = f"{BYBIT_API_URL}{endpoint}"
-            headers = {
-                "X-BAPI-KEY": API_KEY,
-                "X-BAPI-SIGN": signature,
-                "X-BAPI-TIMESTAMP": timestamp,
-                "Content-Type": "application/json"
-            }
-            
-            response = requests.post(url, json=params, headers=headers, timeout=10)
-        
-        if response.status_code in [200, 201]:
-            return response.json()
-        else:
-            print(f"❌ Bybit API error: {response.status_code} - {response.text}")
-            return None
-    
-    except Exception as e:
-        print(f"❌ Request error: {e}")
-        return None
-
 def get_klines(symbol, interval='60', limit=100):
     """Fetch OHLCV data from Bybit"""
     try:
-        params = {
-            'category': 'linear',
-            'symbol': symbol,
-            'interval': interval,
-            'limit': limit
-        }
-        result = bybit_request("GET", "/market/kline", params)
+        klines = session.get_kline(
+            category='linear',
+            symbol=symbol,
+            interval=interval,
+            limit=limit
+        )
         
-        if result and result.get('retCode') == 0:
-            klines = result.get('result', {}).get('list', [])
-            # Bybit returns in reverse order, so reverse it
-            return list(reversed(klines))
+        if klines.get('retCode') == 0:
+            result = klines.get('result', {}).get('list', [])
+            # Reverse to get chronological order
+            return list(reversed(result))
         else:
-            print(f"❌ Failed to fetch klines: {result}")
+            print(f"❌ Failed to fetch klines: {klines.get('retMsg')}")
             return []
     except Exception as e:
         print(f"❌ Error fetching klines: {e}")
         return []
 
-def place_order(symbol, side, qty, order_type='Market'):
-    """Place order on Bybit"""
+def place_order(symbol, side, qty):
+    """Place market order on Bybit"""
     try:
         print(f"📤 Placing {side} order: {symbol} {qty:.6f}")
         
-        params = {
-            'category': 'linear',
-            'symbol': symbol,
-            'side': side,
-            'orderType': order_type,
-            'qty': str(qty),
-            'leverage': str(LEVERAGE),
-            'positionIdx': 0  # One-Way Mode
-        }
+        response = session.place_order(
+            category='linear',
+            symbol=symbol,
+            side=side,
+            orderType='Market',
+            qty=str(qty),
+            leverage=LEVERAGE,
+            positionIdx=0
+        )
         
-        result = bybit_request("POST", "/order/create", params)
-        
-        if result and result.get('retCode') == 0:
-            order_id = result.get('result', {}).get('orderId')
+        if response.get('retCode') == 0:
+            order_id = response.get('result', {}).get('orderId')
             print(f"✅ {side} order placed: {order_id}")
             return order_id
         else:
-            print(f"❌ Order failed: {result}")
+            print(f"❌ Order failed: {response.get('retMsg')}")
             return None
     
     except Exception as e:
