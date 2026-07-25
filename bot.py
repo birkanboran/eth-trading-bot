@@ -95,22 +95,28 @@ async def place_market_buy(symbol, size):
     """Place market BUY order on Bybit"""
     try:
         print(f"📤 Placing BUY order: {symbol} {size}")
+        print(f"DEBUG: Symbol={symbol}, Size={size}, Type=market")
         order = exchange.create_market_buy_order(symbol, size)
+        print(f"DEBUG: Order response = {order}")
         print(f"✅ BUY order placed: {order.get('id', 'unknown')}")
         return order
     except Exception as e:
         print(f"❌ Buy order error: {e}")
+        print(f"DEBUG: Full error = {type(e).__name__}: {str(e)}")
         return None
 
 async def place_market_sell(symbol, size):
     """Place market SELL order on Bybit"""
     try:
         print(f"📤 Placing SELL order: {symbol} {size}")
+        print(f"DEBUG: Symbol={symbol}, Size={size}, Type=market")
         order = exchange.create_market_sell_order(symbol, size)
+        print(f"DEBUG: Order response = {order}")
         print(f"✅ SELL order placed: {order.get('id', 'unknown')}")
         return order
     except Exception as e:
         print(f"❌ Sell order error: {e}")
+        print(f"DEBUG: Full error = {type(e).__name__}: {str(e)}")
         return None
 
 async def check_pair(pair, symbol):
