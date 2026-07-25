@@ -1,133 +1,158 @@
-# ETH/USDT Perpetual Trading Bot - Swing High/Low Strategy
+# Binance ETH/BTC Futures Trading Bot
 
-**5x Leverage | Bybit API | Telegram Signals | 24/7 Automated**
+**Strategy:** Volume Spike Detection on 1-hour candles
 
-## 🎯 Strategy
+## Features
 
-**Swing High/Low Detection**
-- Detects swing lows (best entry points) → BUY signals
-- Detects swing highs (best exit points) → SELL signals
-- 5x leverage for amplified returns
-- 1% risk per trade
-- TP: +2% from entry | SL: -2% from entry
+- ✅ **Sync with Binance** - Reads open positions on startup
+- ✅ **Proper Rounding** - Decimal-based quantity and price rounding
+- ✅ **Real TP/SL Orders** - Take-Profit and Stop-Loss as Binance orders
+- ✅ **Critical Error Handling** - Closes position if TP/SL fails
+- ✅ **Hedge Mode Support** - Compatible with both one-way and hedge modes
+- ✅ **Min Notional/Quantity** - Validates orders before placing
+- ✅ **Testnet by Default** - Safe testing with `BINANCE_TESTNET=true`
+- ✅ **Dry-Run Mode** - Logs orders without executing (`DRY_RUN=true`)
+- ✅ **Live Trading** - Requires explicit `LIVE_TRADING=true`
 
-## 📊 Backtest Results (10 days, Real Bybit Data)
+## Setup
 
-| Metric | Value |
-|--------|-------|
-| Initial Capital | $100 |
-| Final Balance | $877.86 |
-| Total Return | **777.86%** |
-| Total Trades | 103 |
-| Wins | 101 |
-| Losses | 2 |
-| Win Rate | **98.1%** |
-| Max Drawdown | Controlled |
-| Monthly Projection | ~$2,300 profit |
+### 1. Create Binance API Key
 
-## 🟢 BUY Signal Example
+1. Go to https://www.binance.com/en/account/api-management
+2. Create new API key with:
+   - ✅ Spot Trading: Enabled
+   - ✅ Futures Trading: Enabled
+   - ✅ IP Whitelist: No restriction (or add your IP)
+3. Copy API Key and Secret
 
-```
-🟢 BUY SIGNAL - ETH/USDT
+### 2. Create Telegram Bot
 
-📍 Entry: $1914.50
-🎯 TP: $1952.79 (+2%)
-🛑 SL: $1876.21 (-2%)
+1. Message @BotFather on Telegram
+2. Create new bot: `/newbot`
+3. Copy the token
+4. Message your bot and get Chat ID from @userinfobot
 
-📊 Position Size: 0.2245 ETH
-💰 Notional: $430.82
-⚡ Leverage: 5x
-⚠️ Risk: 1%
-
-💵 Current Balance: $877.86
-```
-
-## 🔴 SELL Signal Example
-
-```
-🔴 SELL SIGNAL - ETH/USDT
-
-📍 Entry: $1914.50
-📍 Exit: $1926.06
-🎯 TP: $1952.79
-🛑 SL: $1876.21
-
-💹 PnL: $12.98 (+1.51%)
-✅ Closed by: MARKET
-
-📊 Position Size: 0.2245 ETH
-⚡ Leverage: 5x
-
-💵 Balance: $872.40
-📈 Total Trades: 103
-📊 Daily PnL: $777.86
-```
-
-## 🚀 Setup
-
-### Prerequisites
-- Python 3.11+
-- Bybit API Key & Secret
-- Telegram Bot Token & Chat ID
-
-### Installation
+### 3. Configure Environment
 
 ```bash
-pip install ccxt pandas numpy python-telegram-bot requests
+cp .env.example .env
+# Edit .env with your credentials
 ```
 
-### Environment Variables
+### 4. Install Dependencies
 
 ```bash
-export BYBIT_API_KEY="your_api_key"
-export BYBIT_SECRET_KEY="your_secret_key"
-export TELEGRAM_TOKEN="your_bot_token"
-export TELEGRAM_CHAT_ID="your_chat_id"
+pip install -r requirements.txt
 ```
 
-### Run Bot
+### 5. Run Bot
 
+**Testnet (Safe):**
 ```bash
-python eth_trading_bot_swing_5x.py
+BINANCE_TESTNET=true DRY_RUN=true python bot.py
 ```
 
-## 🔄 GitHub Actions (24/7 Automated)
+**Testnet with Real Orders:**
+```bash
+BINANCE_TESTNET=true LIVE_TRADING=true python bot.py
+```
 
-Bot runs every 15 minutes via GitHub Actions:
-- Fetches latest ETH/USDT data from Bybit
-- Detects swing points
-- Sends signals to Telegram
-- Tracks PnL automatically
+**Live Trading (Real Money):**
+```bash
+BINANCE_TESTNET=false LIVE_TRADING=true python bot.py
+```
 
-## 📁 Files
+## Strategy Details
 
-- `eth_trading_bot_swing_5x.py` - Main production bot (Swing 5x)
-- `eth_trading_bot_demo.py` - Demo/backtest version
-- `.github/workflows/trading-bot.yml` - GitHub Actions automation
-- `README.md` - This file
+### Volume Spike Detection
+- Monitors 1-hour candle volumes
+- Triggers BUY when volume > 2x average (50-period)
+- Uses last **closed** candle (not current)
 
-## ⚠️ Risk Disclaimer
+### Position Management
+- **Risk:** 1% of balance per trade
+- **Position Size:** `(balance * 1%) / ((entry - SL) * leverage)`
+- **TP:** Entry + 3%
+- **SL:** Entry - 2%
+- **Leverage:** 5x
 
-- **High Risk:** 5x leverage is risky, use with caution
-- **Backtested:** Results based on 10 days of historical data
-- **Real Market:** Actual results may differ from backtest
-- **Use at Your Own Risk:** Start with small capital
+### Order Flow
+1. Place BUY market order
+2. Set TP (Take-Profit) order
+3. Set SL (Stop-Loss) order
+4. If TP/SL fails → Close position immediately
+5. Clean up on TP/SL hit
 
-## 📊 Monitoring
+## Configuration
 
-Check signals in Telegram:
-- Every BUY: Entry, TP, SL, Position size, Balance
-- Every SELL: Exit price, PnL, Close reason, New balance
-- Daily/Weekly/Monthly PnL tracking
+Edit `.env`:
 
----
+```env
+LEVERAGE=5              # 1-125x
+RISK_PERCENT=1          # 0.1-10%
+TP_PERCENT=3            # Take-profit %
+SL_PERCENT=2            # Stop-loss %
+VOLUME_MULTIPLIER=2     # Volume spike threshold
+VOLUME_PERIOD=50        # Candles for average
+```
 
-**Strategy:** Swing High/Low Detection
-**Exchange:** Bybit
-**Pair:** ETH/USDT Perpetual
-**Leverage:** 5x
-**Risk:** 1% per trade
-**Timeframe:** 15 minutes
-**Automation:** Every 15 minutes via GitHub Actions
+## Monitoring
 
-Last Updated: 2026-07-22
+Bot logs to console with timestamps. Check for:
+- ✅ Position sync on startup
+- ✅ Volume spike signals
+- ✅ Order placement confirmations
+- ✅ TP/SL order status
+- ❌ Critical errors (TP/SL failures)
+
+## Safety Checks
+
+1. **Quantity Validation** - Checks min/max qty
+2. **Notional Validation** - Checks min notional value
+3. **Price Rounding** - Uses Decimal for precision
+4. **Leverage Check** - Sets leverage before order
+5. **TP/SL Critical** - Closes position if either fails
+
+## Troubleshooting
+
+**"Invalid API-key"**
+- Check API key in .env
+- Verify Futures Trading enabled
+- Check IP whitelist
+
+**"Insufficient balance"**
+- Ensure Futures wallet has USDT
+- Check position size calculation
+
+**"Order rejected"**
+- Verify quantity meets LOT_SIZE
+- Check notional value meets minimum
+- Ensure price is valid
+
+## GitHub Actions
+
+Bot runs every 5 minutes on GitHub Actions:
+- Reads Binance positions
+- Checks volume signals
+- Places orders automatically
+- Sends Telegram notifications
+
+Requires GitHub Secrets:
+- `BINANCE_API_KEY`
+- `BINANCE_SECRET_KEY`
+- `TELEGRAM_TOKEN`
+- `TELEGRAM_CHAT_ID`
+
+## Disclaimer
+
+⚠️ **This bot trades with real money. Use at your own risk.**
+
+- Test on testnet first
+- Start with small positions
+- Monitor regularly
+- Understand the strategy
+- Never share API keys
+
+## License
+
+MIT
