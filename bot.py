@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Bybit ETH/BTC Perpetual Futures Trading Bot - FIXED VERSION
-Strategy: Volume Spike Detection + Swing High/Low
-Real trading enabled with error handling
+Bybit ETH/BTC Perpetual Futures Trading Bot - SYNCHRONOUS VERSION
+Strategy: Volume Spike Detection
+Real trading enabled with simple blocking calls
 """
 import ccxt
-import asyncio
 import json
 import os
 import sys
-from telegram import Bot
+import time
+import requests
 from datetime import datetime, timedelta, timezone
 
 # ============ CONFIGURATION ============
@@ -30,15 +30,12 @@ VOLUME_PERIOD = 50
 STATE_FILE = '/tmp/bot_state.json'
 
 # ============ INITIALIZATION ============
-bot = Bot(token=TELEGRAM_TOKEN)
-
 exchange = ccxt.bybit({
     'apiKey': API_KEY,
     'secret': SECRET_KEY,
     'enableRateLimit': True,
     'options': {
         'defaultType': 'swap',
-        'fetchBalance': 'v5',
     }
 })
 
@@ -60,8 +57,9 @@ def load_state():
                 daily_pnl = data.get('daily_pnl', 0)
                 positions = data.get('positions', {})
                 last_signal_candle = data.get('last_signal_candle', {})
+                print(f"✅ State loaded: balance=${balance:.2f}, pnl=${daily_pnl:.2f}")
     except Exception as e:
-        print(f"Error loading state: {e}")
+        print(f"❌ Error loading state: {e}")
 
 def save_state():
     """Save bot state to JSON file"""
@@ -74,86 +72,83 @@ def save_state():
                 'last_signal_candle': last_signal_candle
             }, f, indent=2)
     except Exception as e:
-        print(f"Error saving state: {e}")
+        print(f"❌ Error saving state: {e}")
 
 # ============ UTILITIES ============
 def get_time_utc3():
-    """Get current time in UTC+3 (Turkey)"""
+    """Get current time in UTC+3"""
     tz = timezone(timedelta(hours=3))
     return datetime.now(tz).strftime('%H:%M')
 
-async def send_telegram(msg):
-    """Send message to Telegram"""
+def send_telegram(msg):
+    """Send message to Telegram (blocking)"""
     try:
-        await bot.send_message(chat_id=CHAT_ID, text=msg)
-        print(f"✅ Telegram sent")
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        data = {'chat_id': CHAT_ID, 'text': msg}
+        response = requests.post(url, data=data, timeout=10)
+        if response.status_code == 200:
+            print(f"✅ Telegram sent")
+        else:
+            print(f"⚠️ Telegram error: {response.status_code}")
     except Exception as e:
         print(f"❌ Telegram error: {e}")
 
 # ============ TRADING LOGIC ============
-async def place_market_buy(symbol, size):
-    """Place market BUY order on Bybit"""
+def place_market_buy(symbol, size):
+    """Place market BUY order"""
     try:
-        print(f"📤 Placing BUY order: {symbol} {size}")
-        print(f"DEBUG: Symbol={symbol}, Size={size}, Type=market")
+        print(f"📤 Placing BUY order: {symbol} {size:.6f}")
         order = exchange.create_market_buy_order(symbol, size)
-        print(f"DEBUG: Order response = {order}")
         print(f"✅ BUY order placed: {order.get('id', 'unknown')}")
         return order
     except Exception as e:
-        print(f"❌ Buy order error: {e}")
-        print(f"DEBUG: Full error = {type(e).__name__}: {str(e)}")
+        print(f"❌ Buy order error: {type(e).__name__}: {e}")
         return None
 
-async def place_market_sell(symbol, size):
-    """Place market SELL order on Bybit"""
+def place_market_sell(symbol, size):
+    """Place market SELL order"""
     try:
-        print(f"📤 Placing SELL order: {symbol} {size}")
-        print(f"DEBUG: Symbol={symbol}, Size={size}, Type=market")
+        print(f"📤 Placing SELL order: {symbol} {size:.6f}")
         order = exchange.create_market_sell_order(symbol, size)
-        print(f"DEBUG: Order response = {order}")
         print(f"✅ SELL order placed: {order.get('id', 'unknown')}")
         return order
     except Exception as e:
-        print(f"❌ Sell order error: {e}")
-        print(f"DEBUG: Full error = {type(e).__name__}: {str(e)}")
+        print(f"❌ Sell order error: {type(e).__name__}: {e}")
         return None
 
-async def check_pair(pair, symbol):
+def check_pair(pair, symbol):
     """Check trading signals for a pair"""
     global balance, daily_pnl, positions, last_signal_candle
     
     try:
         # Fetch OHLCV data
+        print(f"📊 Fetching {pair} data...")
         ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=100)
+        
         if not ohlcv or len(ohlcv) < VOLUME_PERIOD:
             print(f"⚠️ Not enough data for {pair}")
             return
         
-        prices = [x[4] for x in ohlcv]  # Close prices
-        volumes = [x[5] for x in ohlcv]  # Volumes
-        times = [x[0] for x in ohlcv]    # Timestamps
+        prices = [x[4] for x in ohlcv]
+        volumes = [x[5] for x in ohlcv]
+        times = [x[0] for x in ohlcv]
         
         current_time = times[-1]
         current_price = prices[-1]
         
-        print(f"📊 {pair}: Price=${current_price:.2f}, Volume={volumes[-1]:.0f}")
+        print(f"📈 {pair}: Price=${current_price:.2f}, Vol={volumes[-1]:.0f}")
         
         # Check if we have an open position
         has_position = pair in positions
-        print(f"📍 {pair}: Has position = {has_position}")
         
         # Calculate volume spike
         vol_avg = sum(volumes[-VOLUME_PERIOD:]) / VOLUME_PERIOD
         vol_spike = volumes[-1] > vol_avg * VOLUME_MULTIPLIER
-        
-        # Check last 3 candles for volume spike
         recent_vol_spike = any(volumes[-i] > vol_avg * VOLUME_MULTIPLIER for i in range(1, 4))
         
-        print(f"📈 {pair}: Vol={volumes[-1]:.0f}, Avg={vol_avg:.0f}, Spike={vol_spike}")
-        print(f"📊 {pair}: Recent spike={recent_vol_spike}")
+        print(f"📊 {pair}: Vol spike={vol_spike or recent_vol_spike}")
         
-        # ========== ONLY HANDLE OPEN POSITIONS (SELL LOGIC) ==========
+        # ========== HANDLE OPEN POSITIONS (SELL LOGIC) ==========
         if has_position:
             pos = positions[pair]
             entry = pos['entry']
@@ -170,7 +165,7 @@ async def check_pair(pair, symbol):
             # TP HIT
             if current_price >= tp:
                 print(f"🟢 TP HIT for {pair}!")
-                sell_order = await place_market_sell(symbol, size)
+                sell_order = place_market_sell(symbol, size)
                 
                 if sell_order:
                     pnl = (current_price - entry) * size * LEVERAGE
@@ -185,42 +180,24 @@ async def check_pair(pair, symbol):
                     
                     msg = f"""🔴 SELL {pair}
 
-Giriş Fiyatı
-${entry:.2f}
+Giriş: ${entry:.2f}
+Çıkış: ${current_price:.2f}
+TP: ${tp:.2f}
+SL: ${sl:.2f}
 
-Çıkış Fiyatı
-${current_price:.2f}
+Sonuç: ✅ HEDEF TUTTU
+Kar: ${pnl:.2f}
+Bakiye: ${old_balance:.2f} → ${balance:.2f}
+Günlük: ${daily_pnl:.2f}
 
-Hedef (TP)
-${tp:.2f}
-
-Zarar Durdurma (SL)
-${sl:.2f}
-
-Pozisyon Boyutu
-{size:.6f} {pair}
-
-Sonuç
-✅ HEDEF TUTTU
-
-Kar/Zarar
-${pnl:.2f}
-
-Bakiye Değişimi
-${old_balance:.2f} → ${balance:.2f}
-
-Günlük Kar
-${daily_pnl:.2f}
-
-Saat
-{get_time_utc3()}"""
+Saat: {get_time_utc3()}"""
                     
-                    await send_telegram(msg)
+                    send_telegram(msg)
             
             # SL HIT
             elif current_price <= sl:
                 print(f"🔴 SL HIT for {pair}!")
-                sell_order = await place_market_sell(symbol, size)
+                sell_order = place_market_sell(symbol, size)
                 
                 if sell_order:
                     pnl = (current_price - entry) * size * LEVERAGE
@@ -235,46 +212,27 @@ Saat
                     
                     msg = f"""🔴 SELL {pair}
 
-Giriş Fiyatı
-${entry:.2f}
+Giriş: ${entry:.2f}
+Çıkış: ${current_price:.2f}
+TP: ${tp:.2f}
+SL: ${sl:.2f}
 
-Çıkış Fiyatı
-${current_price:.2f}
+Sonuç: ❌ ZARAR DURDURMA
+Zarar: ${pnl:.2f}
+Bakiye: ${old_balance:.2f} → ${balance:.2f}
+Günlük: ${daily_pnl:.2f}
 
-Hedef (TP)
-${tp:.2f}
-
-Zarar Durdurma (SL)
-${sl:.2f}
-
-Pozisyon Boyutu
-{size:.6f} {pair}
-
-Sonuç
-❌ ZARAR DURDURMA
-
-Kar/Zarar
-${pnl:.2f}
-
-Bakiye Değişimi
-${old_balance:.2f} → ${balance:.2f}
-
-Günlük Kar
-${daily_pnl:.2f}
-
-Saat
-{get_time_utc3()}"""
+Saat: {get_time_utc3()}"""
                     
-                    await send_telegram(msg)
+                    send_telegram(msg)
             return
         
         # ========== NO POSITION - CHECK FOR BUY SIGNAL ==========
-        # Prevent duplicate BUY signals from same candle
         if pair in last_signal_candle and last_signal_candle[pair] == current_time:
             print(f"⏭️ {pair}: Skipping BUY (same candle)")
             return
         
-        # BUY SIGNAL: Volume spike detected
+        # BUY SIGNAL
         if vol_spike or recent_vol_spike:
             print(f"🟢 BUY SIGNAL for {pair}!")
             
@@ -282,7 +240,7 @@ Saat
             tp_price = entry_price * (1 + TP_PERCENT / 100)
             sl_price = entry_price * (1 - SL_PERCENT / 100)
             
-            # Calculate position size based on risk
+            # Calculate position size
             risk_amount = balance * (RISK_PERCENT / 100)
             price_diff = entry_price - sl_price
             position_size = risk_amount / (price_diff * LEVERAGE) if price_diff > 0 else 0.01
@@ -290,7 +248,7 @@ Saat
             print(f"💰 Position size: {position_size:.6f}")
             
             # Place buy order
-            buy_order = await place_market_buy(symbol, position_size)
+            buy_order = place_market_buy(symbol, position_size)
             
             if buy_order:
                 positions[pair] = {
@@ -305,62 +263,59 @@ Saat
                 last_signal_candle[pair] = current_time
                 save_state()
                 
-                # Send BUY signal to Telegram
                 msg = f"""🟢 BUY {pair}
 
-Giriş Fiyatı
-${entry_price:.2f}
+Giriş: ${entry_price:.2f}
+TP: ${tp_price:.2f}
+SL: ${sl_price:.2f}
+Boyut: {position_size:.6f}
+Kaldıraç: {LEVERAGE}x
 
-Hedef (TP)
-${tp_price:.2f}
-
-Zarar Durdurma (SL)
-${sl_price:.2f}
-
-Pozisyon Boyutu
-{position_size:.6f} {pair}
-
-Kaldıraç
-{LEVERAGE}x
-
-Bakiye
-${balance:.2f}
-
-Saat
-{get_time_utc3()}"""
+Bakiye: ${balance:.2f}
+Saat: {get_time_utc3()}"""
                 
-                await send_telegram(msg)
+                send_telegram(msg)
     
     except Exception as e:
-        print(f"❌ Error checking {pair}: {e}")
+        print(f"❌ Error checking {pair}: {type(e).__name__}: {e}")
 
 # ============ MAIN LOOP ============
-async def main():
+def main():
     """Main bot loop"""
     load_state()
-    print(f"🤖 Bot started. Initial balance: ${balance:.2f}")
+    print(f"🤖 Bot started. Balance: ${balance:.2f}")
+    print(f"⏰ Running for 5 minutes...")
     
-    while True:
+    start_time = time.time()
+    timeout = 300  # 5 minutes
+    
+    while time.time() - start_time < timeout:
         try:
-            print(f"\n⏰ Checking at {get_time_utc3()}...")
+            print(f"\n⏰ Check at {get_time_utc3()}...")
             
-            # Check both pairs in parallel
-            await asyncio.gather(
-                check_pair('ETH', 'ETH/USDT:USDT'),
-                check_pair('BTC', 'BTC/USDT:USDT')
-            )
+            # Check both pairs
+            check_pair('ETH', 'ETH/USDT:USDT')
+            time.sleep(2)
+            check_pair('BTC', 'BTC/USDT:USDT')
             
-            print(f"✅ Check completed. Sleeping 300s...")
-            # Wait 5 minutes before next check
-            await asyncio.sleep(300)
+            print(f"✅ Check completed")
+            
+            # Wait before next check
+            elapsed = time.time() - start_time
+            remaining = timeout - elapsed
+            if remaining > 0:
+                print(f"⏳ Sleeping... ({remaining:.0f}s remaining)")
+                time.sleep(min(60, remaining))
         
         except Exception as e:
-            print(f"❌ Main loop error: {e}")
-            await asyncio.sleep(300)
+            print(f"❌ Main loop error: {type(e).__name__}: {e}")
+            time.sleep(10)
+    
+    print(f"\n✅ Bot completed. Final balance: ${balance:.2f}, Daily PnL: ${daily_pnl:.2f}")
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         print("\n🛑 Bot stopped")
         sys.exit(0)
