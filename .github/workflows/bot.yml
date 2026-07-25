@@ -3,7 +3,7 @@ name: Trading Bot
 on:
   schedule:
     - cron: '*/5 * * * *'
-  workflow_dispatch:
+  workflow_dispatch
 
 jobs:
   bot:
@@ -13,6 +13,6 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - run: pip install ccxt python-telegram-bot
+      - run: pip install ccxt python-telegram-bot pybit
       - name: Run Bot
         run: timeout 300 python bot.py || true
