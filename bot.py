@@ -133,83 +133,22 @@ async def check_pair(pair, symbol):
         
         print(f"📊 {pair}: Price=${current_price:.2f}, Volume={volumes[-1]:.0f}")
         
-        # Prevent duplicate signals from same candle
-        if pair in last_signal_candle and last_signal_candle[pair] == current_time:
-            print(f"⏭️ {pair}: Skipping (same candle)")
-            return
+        # Check if we have an open position
+        has_position = pair in positions
+        print(f"📍 {pair}: Has position = {has_position}")
         
         # Calculate volume spike
         vol_avg = sum(volumes[-VOLUME_PERIOD:]) / VOLUME_PERIOD
         vol_spike = volumes[-1] > vol_avg * VOLUME_MULTIPLIER
         
-        # Also check if price is moving up (bullish)
-        price_momentum = (prices[-1] - prices[-2]) / prices[-2] * 100 if prices[-2] > 0 else 0
-        
-        # More aggressive: check last 3 candles for volume spike
+        # Check last 3 candles for volume spike
         recent_vol_spike = any(volumes[-i] > vol_avg * VOLUME_MULTIPLIER for i in range(1, 4))
         
         print(f"📈 {pair}: Vol={volumes[-1]:.0f}, Avg={vol_avg:.0f}, Spike={vol_spike}")
-        print(f"📊 {pair}: Momentum={price_momentum:.2f}%, Recent spike={recent_vol_spike}")
+        print(f"📊 {pair}: Recent spike={recent_vol_spike}")
         
-        # ========== BUY SIGNAL ==========
-        if (vol_spike or recent_vol_spike) and pair not in positions:
-            print(f"🟢 BUY SIGNAL for {pair}!")
-            
-            entry_price = current_price
-            tp_price = entry_price * (1 + TP_PERCENT / 100)
-            sl_price = entry_price * (1 - SL_PERCENT / 100)
-            
-            # Calculate position size based on risk
-            risk_amount = balance * (RISK_PERCENT / 100)
-            price_diff = entry_price - sl_price
-            position_size = risk_amount / (price_diff * LEVERAGE) if price_diff > 0 else 0.01
-            
-            print(f"💰 Position size: {position_size:.6f}")
-            
-            # Place buy order
-            buy_order = await place_market_buy(symbol, position_size)
-            
-            if buy_order:
-                positions[pair] = {
-                    'entry': entry_price,
-                    'tp': tp_price,
-                    'sl': sl_price,
-                    'size': position_size,
-                    'leverage': LEVERAGE,
-                    'buy_time': current_time,
-                    'order_id': buy_order.get('id', 'unknown')
-                }
-                last_signal_candle[pair] = current_time
-                save_state()
-                
-                # Send BUY signal to Telegram
-                msg = f"""🟢 BUY {pair}
-
-Giriş Fiyatı
-${entry_price:.2f}
-
-Hedef (TP)
-${tp_price:.2f}
-
-Zarar Durdurma (SL)
-${sl_price:.2f}
-
-Pozisyon Boyutu
-{position_size:.6f} {pair}
-
-Kaldıraç
-{LEVERAGE}x
-
-Bakiye
-${balance:.2f}
-
-Saat
-{get_time_utc3()}"""
-                
-                await send_telegram(msg)
-        
-        # ========== SELL SIGNAL ==========
-        if pair in positions:
+        # ========== ONLY HANDLE OPEN POSITIONS (SELL LOGIC) ==========
+        if has_position:
             pos = positions[pair]
             entry = pos['entry']
             tp = pos['tp']
@@ -321,6 +260,70 @@ Saat
 {get_time_utc3()}"""
                     
                     await send_telegram(msg)
+            return
+        
+        # ========== NO POSITION - CHECK FOR BUY SIGNAL ==========
+        # Prevent duplicate BUY signals from same candle
+        if pair in last_signal_candle and last_signal_candle[pair] == current_time:
+            print(f"⏭️ {pair}: Skipping BUY (same candle)")
+            return
+        
+        # BUY SIGNAL: Volume spike detected
+        if vol_spike or recent_vol_spike:
+            print(f"🟢 BUY SIGNAL for {pair}!")
+            
+            entry_price = current_price
+            tp_price = entry_price * (1 + TP_PERCENT / 100)
+            sl_price = entry_price * (1 - SL_PERCENT / 100)
+            
+            # Calculate position size based on risk
+            risk_amount = balance * (RISK_PERCENT / 100)
+            price_diff = entry_price - sl_price
+            position_size = risk_amount / (price_diff * LEVERAGE) if price_diff > 0 else 0.01
+            
+            print(f"💰 Position size: {position_size:.6f}")
+            
+            # Place buy order
+            buy_order = await place_market_buy(symbol, position_size)
+            
+            if buy_order:
+                positions[pair] = {
+                    'entry': entry_price,
+                    'tp': tp_price,
+                    'sl': sl_price,
+                    'size': position_size,
+                    'leverage': LEVERAGE,
+                    'buy_time': current_time,
+                    'order_id': buy_order.get('id', 'unknown')
+                }
+                last_signal_candle[pair] = current_time
+                save_state()
+                
+                # Send BUY signal to Telegram
+                msg = f"""🟢 BUY {pair}
+
+Giriş Fiyatı
+${entry_price:.2f}
+
+Hedef (TP)
+${tp_price:.2f}
+
+Zarar Durdurma (SL)
+${sl_price:.2f}
+
+Pozisyon Boyutu
+{position_size:.6f} {pair}
+
+Kaldıraç
+{LEVERAGE}x
+
+Bakiye
+${balance:.2f}
+
+Saat
+{get_time_utc3()}"""
+                
+                await send_telegram(msg)
     
     except Exception as e:
         print(f"❌ Error checking {pair}: {e}")
