@@ -142,10 +142,17 @@ async def check_pair(pair, symbol):
         vol_avg = sum(volumes[-VOLUME_PERIOD:]) / VOLUME_PERIOD
         vol_spike = volumes[-1] > vol_avg * VOLUME_MULTIPLIER
         
+        # Also check if price is moving up (bullish)
+        price_momentum = (prices[-1] - prices[-2]) / prices[-2] * 100 if prices[-2] > 0 else 0
+        
+        # More aggressive: check last 3 candles for volume spike
+        recent_vol_spike = any(volumes[-i] > vol_avg * VOLUME_MULTIPLIER for i in range(1, 4))
+        
         print(f"📈 {pair}: Vol={volumes[-1]:.0f}, Avg={vol_avg:.0f}, Spike={vol_spike}")
+        print(f"📊 {pair}: Momentum={price_momentum:.2f}%, Recent spike={recent_vol_spike}")
         
         # ========== BUY SIGNAL ==========
-        if vol_spike and pair not in positions:
+        if (vol_spike or recent_vol_spike) and pair not in positions:
             print(f"🟢 BUY SIGNAL for {pair}!")
             
             entry_price = current_price
