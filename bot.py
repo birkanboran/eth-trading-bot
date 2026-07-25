@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Binance ETH/BTC Perpetual Futures Trading Bot - PRODUCTION v2
-Strategy: Volume Spike Detection (1h candles)
+Binance ETH/BTC Futures Trading Bot - PRODUCTION v3
 CRITICAL FIXES:
-- Proper risk calculation (no leverage division)
-- LIVE_TRADING security lock
-- One-way mode only (no hedge)
-- Real order confirmation via orderId
-- TP/SL recalculation after execution
-- MIN_NOTIONAL with mark price
-- Full position sync every cycle
-- Counter-order cancellation on TP/SL hit
-- Persistent last candle tracking
-- Unit tests included
+- futures_get_position_mode() for one-way check
+- Centralized LIVE_TRADING security lock
+- Dry-run returns real price/qty
+- MARKET_LOT_SIZE rounding
+- Sync positions + TP/SL orders
+- Auto-cancel counter orders on TP/SL hit
+- place_tp_sl_orders() returns orderIds
+- Order query fallback to position info
+- Emergency close verification
+- availableBalance instead of totalWalletBalance
+- Volume spike excludes signal candle
+- Mock-testable functions
 """
 import os
 import sys
@@ -35,16 +36,16 @@ TESTNET = os.getenv('BINANCE_TESTNET', 'true').lower() == 'true'
 LIVE_TRADING = os.getenv('LIVE_TRADING', 'false').lower() == 'true'
 DRY_RUN = os.getenv('DRY_RUN', 'true').lower() == 'true'
 
-# Read from env, with defaults
+# State file
+STATE_FILE = os.getenv('STATE_FILE', '/tmp/bot_state.json')
+
+# Trading parameters from env
 LEVERAGE = int(os.getenv('LEVERAGE', '5'))
 RISK_PERCENT = float(os.getenv('RISK_PERCENT', '1'))
 TP_PERCENT = float(os.getenv('TP_PERCENT', '3'))
 SL_PERCENT = float(os.getenv('SL_PERCENT', '2'))
 VOLUME_MULTIPLIER = float(os.getenv('VOLUME_MULTIPLIER', '2'))
 VOLUME_PERIOD = int(os.getenv('VOLUME_PERIOD', '50'))
-
-# State file for persistent tracking
-STATE_FILE = '/tmp/bot_state.json'
 
 # Setup logging
 logging.basicConfig(
@@ -56,9 +57,9 @@ logger = logging.getLogger(__name__)
 # Initialize Binance client
 try:
     client = Client(API_KEY, SECRET_KEY, testnet=TESTNET)
-    logger.info(f"✅ Binance client initialized (Testnet: {TESTNET}, Live: {LIVE_TRADING}, DryRun: {DRY_RUN})")
+    logger.info(f"✅ Binance client initialized (Testnet: {TESTNET}, Live: {LIVE_TRADING})")
 except Exception as e:
-    logger.error(f"❌ Failed to initialize Binance client: {e}")
+    logger.error(f"❌ Failed to initialize: {e}")
     sys.exit(1)
 
 # Global state
@@ -76,7 +77,7 @@ def load_state():
             with open(STATE_FILE) as f:
                 data = json.load(f)
                 last_processed_candle = data.get('last_candle', {})
-                logger.info(f"✅ State loaded")
+                logger.info(f"✅ State loaded from {STATE_FILE}")
     except Exception as e:
         logger.error(f"❌ Error loading state: {e}")
 
@@ -87,6 +88,15 @@ def save_state():
             json.dump({'last_candle': last_processed_candle}, f)
     except Exception as e:
         logger.error(f"❌ Error saving state: {e}")
+        logger.warning("⚠️ State save failed - duplicate trade risk!")
+
+# ============ SECURITY LOCK ============
+def check_live_trading(operation):
+    """Central LIVE_TRADING security lock"""
+    if not LIVE_TRADING:
+        logger.warning(f"⚠️ LIVE_TRADING=false: {operation} blocked")
+        return False
+    return True
 
 # ============ UTILITIES ============
 def get_time_utc3():
@@ -95,28 +105,29 @@ def get_time_utc3():
     return datetime.now(tz).strftime('%H:%M:%S')
 
 def send_telegram(msg):
-    """Send message to Telegram"""
+    """Send Telegram message"""
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        logger.warning("⚠️ Telegram credentials not set")
+        logger.warning("⚠️ Telegram not configured")
         return
     
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {'chat_id': CHAT_ID, 'text': msg}
-        requests.post(url, data=data, timeout=10)
+        requests.post(url, data={'chat_id': CHAT_ID, 'text': msg}, timeout=10)
         logger.info("✅ Telegram sent")
     except Exception as e:
         logger.error(f"❌ Telegram error: {e}")
 
 def check_position_mode():
-    """Verify one-way mode (not hedge)"""
+    """Verify one-way mode using futures_get_position_mode()"""
     try:
-        account = client.futures_account()
-        position_mode = account.get('positionMode')
-        if position_mode == 'Hedge Mode':
-            logger.error("❌ CRITICAL: Hedge Mode detected. Bot only supports One-Way Mode.")
-            send_telegram("🚨 KRITIK: Hedge Mode açık. Bot One-Way Mode gerektirir.")
+        mode = client.futures_get_position_mode()
+        dual_side = mode.get('dualSidePosition')
+        
+        if dual_side:
+            logger.error("❌ CRITICAL: Hedge Mode detected")
+            send_telegram("🚨 Hedge Mode açık. Bot One-Way Mode gerektirir.")
             return False
+        
         logger.info("✅ One-Way Mode confirmed")
         return True
     except Exception as e:
@@ -140,33 +151,34 @@ def get_symbol_info(symbol):
                         info['maxQty'] = Decimal(filt['maxQty'])
                     elif filt['filterType'] == 'MARKET_LOT_SIZE':
                         info['marketStepSize'] = Decimal(filt['stepSize'])
+                        info['marketMinQty'] = Decimal(filt['minQty'])
+                        info['marketMaxQty'] = Decimal(filt['maxQty'])
                     elif filt['filterType'] == 'PRICE_FILTER':
                         info['tickSize'] = Decimal(filt['tickSize'])
-                        info['minPrice'] = Decimal(filt['minPrice'])
                     elif filt['filterType'] == 'MIN_NOTIONAL':
                         info['minNotional'] = Decimal(filt['notional'])
                 
                 symbol_info[symbol] = info
-                logger.info(f"✅ Symbol info loaded: {symbol}")
+                logger.info(f"✅ Symbol info: {symbol}")
                 return info
         
-        logger.warning(f"⚠️ Symbol {symbol} not found")
+        logger.warning(f"⚠️ Symbol not found: {symbol}")
         return {}
     except Exception as e:
-        logger.error(f"❌ Error getting symbol info: {e}")
+        logger.error(f"❌ Error: {e}")
         return {}
 
-def round_quantity(quantity, symbol):
-    """Round quantity down to stepSize"""
+def round_quantity_market(quantity, symbol):
+    """Round quantity to MARKET_LOT_SIZE stepSize"""
     info = get_symbol_info(symbol)
-    if not info or 'stepSize' not in info:
+    if not info or 'marketStepSize' not in info:
         return quantity
     
     qty_decimal = Decimal(str(quantity))
-    step_size = info['stepSize']
+    step_size = info['marketStepSize']
     
     rounded = (qty_decimal / step_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * step_size
-    logger.info(f"Quantity rounded: {quantity} → {rounded}")
+    logger.info(f"Quantity rounded (MARKET): {quantity} → {rounded}")
     return float(rounded)
 
 def round_price(price, symbol):
@@ -182,57 +194,62 @@ def round_price(price, symbol):
     return float(rounded)
 
 def get_mark_price(symbol):
-    """Get current mark price for notional validation"""
+    """Get mark price"""
     try:
         ticker = client.futures_mark_price(symbol=symbol)
         return float(ticker['markPrice'])
     except Exception as e:
-        logger.error(f"❌ Error getting mark price: {e}")
+        logger.error(f"❌ Error: {e}")
         return 0
 
-def validate_order(symbol, quantity, price=None):
-    """Validate order meets Binance minimums"""
+def validate_order(symbol, quantity):
+    """Validate order with MARKET_LOT_SIZE"""
     info = get_symbol_info(symbol)
     if not info:
         return False, "No symbol info"
     
     qty_decimal = Decimal(str(quantity))
     
-    # Check quantity
-    if qty_decimal < info.get('minQty', Decimal('0')):
-        return False, f"Qty {quantity} < min {info['minQty']}"
+    # Check MARKET_LOT_SIZE
+    market_min = info.get('marketMinQty', Decimal('0'))
+    market_max = info.get('marketMaxQty', Decimal('999999'))
     
-    if qty_decimal > info.get('maxQty', Decimal('999999')):
-        return False, f"Qty {quantity} > max {info['maxQty']}"
+    if qty_decimal < market_min:
+        return False, f"Qty {quantity} < market min {market_min}"
     
-    # Check notional with mark price
+    if qty_decimal > market_max:
+        return False, f"Qty {quantity} > market max {market_max}"
+    
+    # Check notional
     mark_price = get_mark_price(symbol)
     if mark_price > 0:
         notional = qty_decimal * Decimal(str(mark_price))
         if notional < info.get('minNotional', Decimal('0')):
-            return False, f"Notional {notional} < min {info['minNotional']}"
+            return False, f"Notional {notional} < min"
     
     return True, "OK"
 
-def get_account_balance():
-    """Get real account balance"""
+def get_available_balance():
+    """Get availableBalance (not totalWalletBalance)"""
     try:
         account = client.futures_account()
-        balance = float(account.get('totalWalletBalance', 0))
-        logger.info(f"💰 Balance: {balance:.2f} USDT")
-        return balance
+        available = float(account.get('availableBalance', 0))
+        logger.info(f"💰 Available balance: {available:.2f} USDT")
+        return available
     except Exception as e:
-        logger.error(f"❌ Error getting balance: {e}")
+        logger.error(f"❌ Error: {e}")
         return 0
 
 def sync_positions():
-    """Sync with real Binance positions"""
+    """Sync positions and TP/SL orders"""
     global positions
     try:
-        logger.info("📊 Syncing positions...")
-        open_positions = client.futures_position_information()
+        logger.info("📊 Syncing positions and orders...")
         
+        # Get positions
+        open_positions = client.futures_position_information()
         positions = {}
+        
         for pos in open_positions:
             if float(pos['positionAmt']) != 0:
                 symbol = pos['symbol']
@@ -241,41 +258,33 @@ def sync_positions():
                     'size': abs(float(pos['positionAmt'])),
                     'side': 'BUY' if float(pos['positionAmt']) > 0 else 'SELL',
                     'leverage': int(pos['leverage']),
+                    'tp_order_id': None,
+                    'sl_order_id': None,
                     'synced': True
                 }
-                logger.info(f"✅ Synced {symbol}: size={positions[symbol]['size']}")
+                
+                # Get TP/SL orders
+                orders = client.futures_get_open_orders(symbol=symbol)
+                for order in orders:
+                    if order['type'] == 'TAKE_PROFIT_MARKET':
+                        positions[symbol]['tp_order_id'] = order['orderId']
+                    elif order['type'] == 'STOP_MARKET':
+                        positions[symbol]['sl_order_id'] = order['orderId']
+                
+                logger.info(f"✅ {symbol}: size={positions[symbol]['size']}, TP={positions[symbol]['tp_order_id']}, SL={positions[symbol]['sl_order_id']}")
         
         logger.info(f"✅ Synced {len(positions)} positions")
         return True
     except Exception as e:
-        logger.error(f"❌ Error syncing: {e}")
-        return False
-
-def get_open_orders(symbol):
-    """Get open orders for symbol"""
-    try:
-        orders = client.futures_get_open_orders(symbol=symbol)
-        return orders
-    except Exception as e:
-        logger.error(f"❌ Error getting orders: {e}")
-        return []
-
-def cancel_order(symbol, order_id):
-    """Cancel order"""
-    try:
-        if DRY_RUN and not LIVE_TRADING:
-            logger.info(f"🏝️ DRY RUN: Would cancel order {order_id}")
-            return True
-        
-        client.futures_cancel_order(symbol=symbol, orderId=order_id)
-        logger.info(f"✅ Order cancelled: {order_id}")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Error cancelling order: {e}")
+        logger.error(f"❌ Error: {e}")
         return False
 
 def set_leverage(symbol, leverage):
-    """Set leverage"""
+    """Set leverage with LIVE_TRADING check"""
+    if not check_live_trading(f"set_leverage {symbol}"):
+        logger.info(f"🏝️ DRY RUN: Would set leverage {leverage}x")
+        return True
+    
     try:
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
         logger.info(f"✅ Leverage set to {leverage}x")
@@ -283,7 +292,7 @@ def set_leverage(symbol, leverage):
     except BinanceAPIException as e:
         if "No need to change" in str(e):
             return True
-        logger.error(f"❌ Leverage error: {e}")
+        logger.error(f"❌ Error: {e}")
         return False
     except Exception as e:
         logger.error(f"❌ Error: {e}")
@@ -291,14 +300,16 @@ def set_leverage(symbol, leverage):
 
 def place_order(symbol, side, quantity):
     """Place market order"""
-    # CRITICAL: Security check
-    if not LIVE_TRADING:
-        if DRY_RUN:
-            logger.info(f"🏝️ DRY RUN: Would place {side} {quantity} {symbol}")
-            return {'orderId': 'DRY_RUN', 'avgPrice': 0, 'executedQty': 0}
-        else:
-            logger.error("❌ SECURITY: Live trading disabled. No order placed.")
-            return None
+    if not check_live_trading(f"place_order {symbol}"):
+        # Dry-run: return real price and rounded qty
+        mark_price = get_mark_price(symbol)
+        quantity = round_quantity_market(quantity, symbol)
+        logger.info(f"🏝️ DRY RUN: {side} {quantity} {symbol} @ {mark_price}")
+        return {
+            'orderId': 'DRY_RUN',
+            'avgPrice': mark_price,
+            'executedQty': quantity
+        }
     
     try:
         # Validate
@@ -307,13 +318,12 @@ def place_order(symbol, side, quantity):
             logger.error(f"❌ Validation failed: {msg}")
             return None
         
-        quantity = round_quantity(quantity, symbol)
+        quantity = round_quantity_market(quantity, symbol)
         
-        logger.info(f"📤 Placing {side} order: {symbol} {quantity}")
+        logger.info(f"📤 Placing {side} {quantity} {symbol}")
         
-        # Set leverage first
+        # Set leverage
         if not set_leverage(symbol, LEVERAGE):
-            logger.error("❌ Leverage failed. Not placing order.")
             return None
         
         # Place order
@@ -325,24 +335,37 @@ def place_order(symbol, side, quantity):
         )
         
         order_id = order.get('orderId')
+        logger.info(f"✅ Order placed: {order_id}")
         
-        # Query order to get real execution details
+        # Query order for execution details
         time.sleep(0.5)
-        order_details = client.futures_get_order(symbol=symbol, orderId=order_id)
+        try:
+            order_details = client.futures_get_order(symbol=symbol, orderId=order_id)
+            avg_price = float(order_details.get('avgPrice', 0))
+            executed_qty = float(order_details.get('executedQty', 0))
+            
+            if avg_price == 0 or executed_qty == 0:
+                logger.warning(f"⚠️ Order query returned zero values. Checking position info...")
+                
+                # Fallback: check position info
+                pos_info = client.futures_position_information(symbol=symbol)
+                if pos_info and float(pos_info[0]['positionAmt']) != 0:
+                    avg_price = float(pos_info[0]['entryPrice'])
+                    executed_qty = abs(float(pos_info[0]['positionAmt']))
+                    logger.info(f"✅ Got data from position info: {avg_price}, {executed_qty}")
+                else:
+                    logger.error(f"❌ Order query failed and no position found")
+                    return None
+            
+            return {
+                'orderId': order_id,
+                'avgPrice': avg_price,
+                'executedQty': executed_qty
+            }
         
-        avg_price = float(order_details.get('avgPrice', 0))
-        executed_qty = float(order_details.get('executedQty', 0))
-        
-        if avg_price == 0 or executed_qty == 0:
-            logger.error(f"❌ Order not fully executed. avgPrice={avg_price}, qty={executed_qty}")
+        except Exception as e:
+            logger.error(f"❌ Order query error: {e}")
             return None
-        
-        logger.info(f"✅ Order {order_id}: avgPrice={avg_price}, qty={executed_qty}")
-        return {
-            'orderId': order_id,
-            'avgPrice': avg_price,
-            'executedQty': executed_qty
-        }
     
     except BinanceAPIException as e:
         logger.error(f"❌ Order failed: {e}")
@@ -351,11 +374,29 @@ def place_order(symbol, side, quantity):
         logger.error(f"❌ Error: {e}")
         return None
 
+def cancel_order(symbol, order_id):
+    """Cancel order with LIVE_TRADING check"""
+    if not check_live_trading(f"cancel_order {order_id}"):
+        logger.info(f"🏝️ DRY RUN: Would cancel {order_id}")
+        return True
+    
+    try:
+        client.futures_cancel_order(symbol=symbol, orderId=order_id)
+        logger.info(f"✅ Order cancelled: {order_id}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Error: {e}")
+        return False
+
 def place_tp_sl_orders(symbol, position_size, entry_price, tp_price, sl_price, side):
-    """Place TP and SL orders"""
+    """Place TP and SL orders, return orderIds"""
+    if not check_live_trading(f"place_tp_sl_orders {symbol}"):
+        logger.info(f"🏝️ DRY RUN: TP/SL orders")
+        return {'tp_order_id': 'DRY_RUN_TP', 'sl_order_id': 'DRY_RUN_SL'}
+    
     try:
         close_side = 'SELL' if side == 'BUY' else 'BUY'
-        quantity = round_quantity(position_size, symbol)
+        quantity = round_quantity_market(position_size, symbol)
         tp_price = round_price(tp_price, symbol)
         sl_price = round_price(sl_price, symbol)
         
@@ -366,53 +407,45 @@ def place_tp_sl_orders(symbol, position_size, entry_price, tp_price, sl_price, s
         
         # TP order
         try:
-            if DRY_RUN and not LIVE_TRADING:
-                logger.info(f"🏝️ DRY RUN: Would place TP")
-                tp_order_id = "DRY_RUN_TP"
-            else:
-                tp_order = client.futures_create_order(
-                    symbol=symbol,
-                    side=close_side,
-                    type='TAKE_PROFIT_MARKET',
-                    quantity=quantity,
-                    stopPrice=tp_price,
-                    reduceOnly=True
-                )
-                tp_order_id = tp_order.get('orderId')
-                logger.info(f"✅ TP order: {tp_order_id}")
+            tp_order = client.futures_create_order(
+                symbol=symbol,
+                side=close_side,
+                type='TAKE_PROFIT_MARKET',
+                quantity=quantity,
+                stopPrice=tp_price,
+                reduceOnly=True
+            )
+            tp_order_id = tp_order.get('orderId')
+            logger.info(f"✅ TP order: {tp_order_id}")
         except BinanceAPIException as e:
             logger.error(f"❌ TP failed: {e}")
         
         # SL order
         try:
-            if DRY_RUN and not LIVE_TRADING:
-                logger.info(f"🏝️ DRY RUN: Would place SL")
-                sl_order_id = "DRY_RUN_SL"
-            else:
-                sl_order = client.futures_create_order(
-                    symbol=symbol,
-                    side=close_side,
-                    type='STOP_MARKET',
-                    quantity=quantity,
-                    stopPrice=sl_price,
-                    reduceOnly=True
-                )
-                sl_order_id = sl_order.get('orderId')
-                logger.info(f"✅ SL order: {sl_order_id}")
+            sl_order = client.futures_create_order(
+                symbol=symbol,
+                side=close_side,
+                type='STOP_MARKET',
+                quantity=quantity,
+                stopPrice=sl_price,
+                reduceOnly=True
+            )
+            sl_order_id = sl_order.get('orderId')
+            logger.info(f"✅ SL order: {sl_order_id}")
         except BinanceAPIException as e:
             logger.error(f"❌ SL failed: {e}")
         
         # CRITICAL: Both must succeed
         if not (tp_order_id and sl_order_id):
-            logger.error(f"🚨 CRITICAL: TP/SL incomplete! TP={tp_order_id}, SL={sl_order_id}")
+            logger.error(f"🚨 CRITICAL: TP/SL incomplete!")
             
             # Cancel successful one
-            if tp_order_id and tp_order_id != "DRY_RUN_TP":
+            if tp_order_id:
                 cancel_order(symbol, tp_order_id)
-            if sl_order_id and sl_order_id != "DRY_RUN_SL":
+            if sl_order_id:
                 cancel_order(symbol, sl_order_id)
             
-            # Close position
+            # Emergency close
             try:
                 close_order = client.futures_create_order(
                     symbol=symbol,
@@ -421,27 +454,38 @@ def place_tp_sl_orders(symbol, position_size, entry_price, tp_price, sl_price, s
                     quantity=quantity,
                     reduceOnly=True
                 )
-                logger.info(f"✅ Position closed: {close_order.get('orderId')}")
+                close_id = close_order.get('orderId')
+                
+                # Verify close
+                time.sleep(0.5)
+                pos_info = client.futures_position_information(symbol=symbol)
+                if pos_info and float(pos_info[0]['positionAmt']) == 0:
+                    logger.info(f"✅ Position closed: {close_id}")
+                else:
+                    logger.error(f"❌ Close verification failed")
+                    global critical_error
+                    critical_error = True
+            
             except Exception as e:
-                logger.error(f"❌ Failed to close: {e}")
-                global critical_error
+                logger.error(f"❌ Emergency close failed: {e}")
                 critical_error = True
             
-            return False
+            return None
         
-        return True
+        return {'tp_order_id': tp_order_id, 'sl_order_id': sl_order_id}
+    
     except Exception as e:
         logger.error(f"❌ Error: {e}")
-        return False
+        return None
 
 # ============ BINANCE API ============
 def get_klines(symbol, interval='1h', limit=100):
-    """Fetch last CLOSED candle"""
+    """Fetch klines"""
     try:
         klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
         return klines
     except Exception as e:
-        logger.error(f"❌ Error fetching klines: {e}")
+        logger.error(f"❌ Error: {e}")
         return []
 
 # ============ TRADING LOGIC ============
@@ -450,18 +494,18 @@ def check_pair(pair, symbol, balance):
     global positions, last_processed_candle, critical_error
     
     if critical_error:
-        logger.error("🚨 CRITICAL ERROR: Bot in critical state. Not opening new positions.")
+        logger.error("🚨 CRITICAL: Bot halted")
         return
     
     try:
         logger.info(f"📊 Checking {pair}...")
         klines = get_klines(symbol, interval='1h', limit=100)
         
-        if not klines or len(klines) < VOLUME_PERIOD:
+        if not klines or len(klines) < VOLUME_PERIOD + 1:
             logger.warning(f"⚠️ Not enough data")
             return
         
-        # Last CLOSED candle (not current)
+        # Last CLOSED candle (exclude current)
         prices = [float(x[4]) for x in klines[:-1]]
         volumes = [float(x[7]) for x in klines[:-1]]
         times = [int(x[0]) for x in klines[:-1]]
@@ -472,15 +516,15 @@ def check_pair(pair, symbol, balance):
         current_time = times[-1]
         current_price = prices[-1]
         
-        # Prevent duplicate signals
+        # Prevent duplicates
         if last_processed_candle.get(symbol) == current_time:
-            logger.info(f"⏭️ Already processed this candle")
+            logger.info(f"⏭️ Already processed")
             return
         
         logger.info(f"📈 {pair}: Price=${current_price:.2f}, Vol={volumes[-1]:.0f}")
         
-        # Volume spike
-        vol_avg = sum(volumes[-VOLUME_PERIOD:]) / VOLUME_PERIOD
+        # Volume spike: exclude signal candle from average
+        vol_avg = sum(volumes[-VOLUME_PERIOD-1:-1]) / VOLUME_PERIOD  # Exclude last
         vol_spike = volumes[-1] > vol_avg * VOLUME_MULTIPLIER
         
         # BUY SIGNAL
@@ -491,16 +535,15 @@ def check_pair(pair, symbol, balance):
             tp_price = entry_price * (1 + TP_PERCENT / 100)
             sl_price = entry_price * (1 - SL_PERCENT / 100)
             
-            # CRITICAL FIX: Risk calculation WITHOUT leverage division
+            # Risk calculation
             risk_amount = balance * (RISK_PERCENT / 100)
             price_diff = entry_price - sl_price
             position_size = risk_amount / price_diff if price_diff > 0 else 0.01
             
-            # Required margin = (position_size * entry_price) / leverage
+            # Margin check
             required_margin = (position_size * entry_price) / LEVERAGE
-            
             if required_margin > balance:
-                logger.error(f"❌ Insufficient margin. Required: {required_margin:.2f}, Available: {balance:.2f}")
+                logger.error(f"❌ Insufficient margin")
                 return
             
             logger.info(f"💰 Size: {position_size:.8f}, Margin: {required_margin:.2f}")
@@ -509,11 +552,10 @@ def check_pair(pair, symbol, balance):
             order_result = place_order(symbol, 'BUY', position_size)
             
             if order_result:
-                # Use real execution data
                 entry_price = order_result.get('avgPrice', entry_price)
                 position_size = order_result.get('executedQty', position_size)
                 
-                # Recalculate TP/SL with real entry
+                # Recalculate TP/SL
                 tp_price = entry_price * (1 + TP_PERCENT / 100)
                 sl_price = entry_price * (1 - SL_PERCENT / 100)
                 
@@ -529,7 +571,12 @@ def check_pair(pair, symbol, balance):
                 }
                 
                 # Place TP/SL
-                if not place_tp_sl_orders(symbol, position_size, entry_price, tp_price, sl_price, 'BUY'):
+                tp_sl_result = place_tp_sl_orders(symbol, position_size, entry_price, tp_price, sl_price, 'BUY')
+                
+                if tp_sl_result:
+                    positions[symbol]['tp_order_id'] = tp_sl_result.get('tp_order_id')
+                    positions[symbol]['sl_order_id'] = tp_sl_result.get('sl_order_id')
+                else:
                     logger.error(f"🚨 TP/SL failed")
                     del positions[symbol]
                     return
@@ -556,7 +603,7 @@ def main():
     
     logger.info(f"🤖 Bot started at {get_time_utc3()}")
     logger.info(f"Config: Testnet={TESTNET}, Live={LIVE_TRADING}, DryRun={DRY_RUN}")
-    logger.info(f"Strategy: Volume Spike (multiplier={VOLUME_MULTIPLIER}, period={VOLUME_PERIOD})")
+    logger.info(f"State file: {STATE_FILE}")
     
     load_state()
     
@@ -582,7 +629,7 @@ def main():
             # Full sync every cycle
             sync_positions()
             
-            balance = get_account_balance()
+            balance = get_available_balance()
             if balance <= 0:
                 logger.error("❌ Balance is 0")
                 time.sleep(300)
