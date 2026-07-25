@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Bybit ETH/BTC Perpetual Futures Trading Bot - PyBit SDK VERSION
+Binance ETH/BTC Perpetual Futures Trading Bot
 Strategy: Volume Spike Detection
-Using official PyBit SDK for reliable order placement
+Using python-binance library for reliable order placement
 """
 import requests
 import json
@@ -10,11 +10,12 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from pybit.unified_trading import HTTP
+from binance.client import Client
+from binance.exceptions import BinanceAPIException
 
 # ============ CONFIGURATION ============
-API_KEY = "docc2UOm7uWWp17Q1c"
-SECRET_KEY = "ORGVyaQPk1BvVFrOEaEXGsWgXIlYiLAxO47B"
+API_KEY = "H7iuFE4Qh5C0exsnSbwZ20JMzjqGEKkV0pXyVhWYGODB66AhZUs67FIQc2GjIu8P"
+SECRET_KEY = "hXmbpkUHgSFBld6P2KGyltkkwWNJcM5re1fCM4TAlv1DaOYGH4ovKJ35OYUOVtPr"
 TELEGRAM_TOKEN = '8993995766:AAGxfrHRnL-9VxBUjOJXA__9BaAVMgD4ndU'
 CHAT_ID = '851788804'
 
@@ -29,12 +30,8 @@ VOLUME_PERIOD = 50
 # State file
 STATE_FILE = '/tmp/bot_state.json'
 
-# Initialize Bybit session
-session = HTTP(
-    testnet=False,
-    api_key=API_KEY,
-    api_secret=SECRET_KEY,
-)
+# Initialize Binance client
+client = Client(API_KEY, SECRET_KEY)
 
 # Global state
 balance = 95.99
@@ -90,51 +87,39 @@ def send_telegram(msg):
     except Exception as e:
         print(f"❌ Telegram error: {e}")
 
-# ============ BYBIT API ============
-def get_klines(symbol, interval='60', limit=100):
-    """Fetch OHLCV data from Bybit"""
+# ============ BINANCE API ============
+def get_klines(symbol, interval='1h', limit=100):
+    """Fetch OHLCV data from Binance"""
     try:
-        klines = session.get_kline(
-            category='linear',
-            symbol=symbol,
-            interval=interval,
-            limit=limit
-        )
-        
-        if klines.get('retCode') == 0:
-            result = klines.get('result', {}).get('list', [])
-            # Reverse to get chronological order
-            return list(reversed(result))
-        else:
-            print(f"❌ Failed to fetch klines: {klines.get('retMsg')}")
-            return []
+        klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
+        return klines
+    except BinanceAPIException as e:
+        print(f"❌ Error fetching klines: {e}")
+        return []
     except Exception as e:
         print(f"❌ Error fetching klines: {e}")
         return []
 
-def place_order(symbol, side, qty):
-    """Place market order on Bybit"""
+def place_order(symbol, side, quantity):
+    """Place market order on Binance Futures"""
     try:
-        print(f"📤 Placing {side} order: {symbol} {qty:.6f}")
+        print(f"📤 Placing {side} order: {symbol} {quantity:.6f}")
         
-        response = session.place_order(
-            category='linear',
+        order = client.futures_create_order(
             symbol=symbol,
             side=side,
-            orderType='Market',
-            qty=str(qty),
-            leverage=LEVERAGE,
-            positionIdx=0
+            type='MARKET',
+            quantity=quantity,
+            leverage=LEVERAGE
         )
         
-        if response.get('retCode') == 0:
-            order_id = response.get('result', {}).get('orderId')
-            print(f"✅ {side} order placed: {order_id}")
-            return order_id
-        else:
-            print(f"❌ Order failed: {response.get('retMsg')}")
-            return None
+        order_id = order.get('orderId')
+        print(f"✅ {side} order placed: {order_id}")
+        return order_id
     
+    except BinanceAPIException as e:
+        print(f"❌ Order failed: {e}")
+        return None
     except Exception as e:
         print(f"❌ Order error: {e}")
         return None
@@ -147,13 +132,13 @@ def check_pair(pair, symbol):
     try:
         # Fetch OHLCV data
         print(f"📊 Fetching {pair} data...")
-        klines = get_klines(symbol, interval='60', limit=100)
+        klines = get_klines(symbol, interval='1h', limit=100)
         
         if not klines or len(klines) < VOLUME_PERIOD:
             print(f"⚠️ Not enough data for {pair}")
             return
         
-        # Parse klines: [timestamp, open, high, low, close, volume, ...]
+        # Parse klines: [time, open, high, low, close, volume, ...]
         prices = [float(x[4]) for x in klines]
         volumes = [float(x[7]) for x in klines]  # Quote asset volume
         times = [int(x[0]) for x in klines]
@@ -190,7 +175,7 @@ def check_pair(pair, symbol):
             # TP HIT
             if current_price >= tp:
                 print(f"🟢 TP HIT for {pair}!")
-                sell_order = place_order(symbol, 'Sell', size)
+                sell_order = place_order(symbol, 'SELL', size)
                 
                 if sell_order:
                     pnl = (current_price - entry) * size * LEVERAGE
@@ -240,7 +225,7 @@ Saat
             # SL HIT
             elif current_price <= sl:
                 print(f"🔴 SL HIT for {pair}!")
-                sell_order = place_order(symbol, 'Sell', size)
+                sell_order = place_order(symbol, 'SELL', size)
                 
                 if sell_order:
                     pnl = (current_price - entry) * size * LEVERAGE
@@ -309,7 +294,7 @@ Saat
             print(f"💰 Position size: {position_size:.6f}")
             
             # Place buy order
-            buy_order = place_order(symbol, 'Buy', position_size)
+            buy_order = place_order(symbol, 'BUY', position_size)
             
             if buy_order:
                 positions[pair] = {
