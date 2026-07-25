@@ -287,9 +287,8 @@ Saat
             sl_price = entry_price * (1 - SL_PERCENT / 100)
             
             # Calculate position size
-            risk_amount = balance * (RISK_PERCENT / 100)
-            price_diff = entry_price - sl_price
-            position_size = risk_amount / (price_diff * LEVERAGE) if price_diff > 0 else 0.01
+            # Use fixed position size for reliability
+            position_size = 0.01  # Fixed: 0.01 ETH or BTC
             
             print(f"💰 Position size: {position_size:.6f}")
             
