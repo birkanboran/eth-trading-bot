@@ -2,8 +2,8 @@ name: Trading Bot
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch
+    - cron: '0 * * * *'  # Every hour
+  workflow_dispatch:
 
 jobs:
   bot:
@@ -13,6 +13,12 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - run: pip install python-binance python-telegram-bot
+      - run: pip install -r requirements.txt
       - name: Run Bot
-        run: timeout 300 python bot.py || true
+        env:
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
+          BINANCE_TESTNET: 'false'
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: timeout 3600 python bot.py || true

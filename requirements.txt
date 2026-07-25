@@ -1,5 +1,2 @@
-ccxt>=4.0.0
-pandas>=2.0.0
-ta>=0.10.2
-python-telegram-bot>=20.0
-requests>=2.31.0
+python-binance==1.0.17
+requests==2.31.0
