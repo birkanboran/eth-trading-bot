@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 """
-Bybit ETH/BTC Perpetual Futures Trading Bot - SYNCHRONOUS VERSION
+Bybit ETH/BTC Perpetual Futures Trading Bot - BYBIT REST API VERSION
 Strategy: Volume Spike Detection
-Real trading enabled with simple blocking calls
+Direct REST API calls for reliable order placement
 """
-import ccxt
+import requests
 import json
 import os
 import sys
 import time
-import requests
+import hmac
+import hashlib
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 # ============ CONFIGURATION ============
 API_KEY = "mUTJK74gQTJ6Tp67z6"
 SECRET_KEY = "k3ulpN87Kjm7iiGqvZAYKF5V4TQDDGdLot3K"
 TELEGRAM_TOKEN = '8993995766:AAGxfrHRnL-9VxBUjOJXA__9BaAVMgD4ndU'
 CHAT_ID = '851788804'
+BYBIT_API_URL = "https://api.bybit.com/v5"
 
 # Trading parameters
 LEVERAGE = 5
@@ -28,16 +31,6 @@ VOLUME_PERIOD = 50
 
 # State file
 STATE_FILE = '/tmp/bot_state.json'
-
-# ============ INITIALIZATION ============
-exchange = ccxt.bybit({
-    'apiKey': API_KEY,
-    'secret': SECRET_KEY,
-    'enableRateLimit': True,
-    'options': {
-        'defaultType': 'swap',
-    }
-})
 
 # Global state
 balance = 95.99
@@ -93,35 +86,115 @@ def send_telegram(msg):
     except Exception as e:
         print(f"❌ Telegram error: {e}")
 
+# ============ BYBIT API ============
+def get_bybit_signature(payload, secret):
+    """Generate Bybit API signature"""
+    return hmac.new(
+        secret.encode(),
+        payload.encode(),
+        hashlib.sha256
+    ).hexdigest()
+
+def bybit_request(method, endpoint, params=None):
+    """Make Bybit API request"""
+    try:
+        timestamp = str(int(time.time() * 1000))
+        
+        if method == "GET":
+            query_string = urlencode(params) if params else ""
+            payload = f"GET{endpoint}?{query_string}{timestamp}{API_KEY}"
+            signature = get_bybit_signature(payload, SECRET_KEY)
+            
+            url = f"{BYBIT_API_URL}{endpoint}"
+            if query_string:
+                url += f"?{query_string}"
+            
+            headers = {
+                "X-BAPI-KEY": API_KEY,
+                "X-BAPI-SIGN": signature,
+                "X-BAPI-TIMESTAMP": timestamp,
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.get(url, headers=headers, timeout=10)
+        
+        else:  # POST
+            body = json.dumps(params) if params else "{}"
+            payload = f"POST{endpoint}{body}{timestamp}{API_KEY}"
+            signature = get_bybit_signature(payload, SECRET_KEY)
+            
+            url = f"{BYBIT_API_URL}{endpoint}"
+            headers = {
+                "X-BAPI-KEY": API_KEY,
+                "X-BAPI-SIGN": signature,
+                "X-BAPI-TIMESTAMP": timestamp,
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.post(url, json=params, headers=headers, timeout=10)
+        
+        if response.status_code in [200, 201]:
+            return response.json()
+        else:
+            print(f"❌ Bybit API error: {response.status_code} - {response.text}")
+            return None
+    
+    except Exception as e:
+        print(f"❌ Request error: {e}")
+        return None
+
+def get_klines(symbol, interval='60', limit=100):
+    """Fetch OHLCV data from Bybit"""
+    try:
+        params = {
+            'category': 'linear',
+            'symbol': symbol,
+            'interval': interval,
+            'limit': limit
+        }
+        result = bybit_request("GET", "/market/kline", params)
+        
+        if result and result.get('retCode') == 0:
+            klines = result.get('result', {}).get('list', [])
+            # Bybit returns in reverse order, so reverse it
+            return list(reversed(klines))
+        else:
+            print(f"❌ Failed to fetch klines: {result}")
+            return []
+    except Exception as e:
+        print(f"❌ Error fetching klines: {e}")
+        return []
+
+def place_order(symbol, side, qty, order_type='Market'):
+    """Place order on Bybit"""
+    try:
+        print(f"📤 Placing {side} order: {symbol} {qty:.6f}")
+        
+        params = {
+            'category': 'linear',
+            'symbol': symbol,
+            'side': side,
+            'orderType': order_type,
+            'qty': str(qty),
+            'leverage': str(LEVERAGE),
+            'positionIdx': 0  # One-Way Mode
+        }
+        
+        result = bybit_request("POST", "/order/create", params)
+        
+        if result and result.get('retCode') == 0:
+            order_id = result.get('result', {}).get('orderId')
+            print(f"✅ {side} order placed: {order_id}")
+            return order_id
+        else:
+            print(f"❌ Order failed: {result}")
+            return None
+    
+    except Exception as e:
+        print(f"❌ Order error: {e}")
+        return None
+
 # ============ TRADING LOGIC ============
-def place_market_buy(symbol, size):
-    """Place market BUY order"""
-    try:
-        print(f"📤 Placing BUY order: {symbol} {size:.6f}")
-        print(f"DEBUG: Attempting to buy {size:.6f} {symbol}")
-        order = exchange.create_market_buy_order(symbol, size)
-        print(f"✅ BUY order placed: {order.get('id', 'unknown')}")
-        print(f"DEBUG: Order response: {order}")
-        return order
-    except Exception as e:
-        print(f"❌ Buy order error: {type(e).__name__}: {e}")
-        print(f"DEBUG: Full error traceback: {str(e)}")
-        return None
-
-def place_market_sell(symbol, size):
-    """Place market SELL order"""
-    try:
-        print(f"📤 Placing SELL order: {symbol} {size:.6f}")
-        print(f"DEBUG: Attempting to sell {size:.6f} {symbol}")
-        order = exchange.create_market_sell_order(symbol, size)
-        print(f"✅ SELL order placed: {order.get('id', 'unknown')}")
-        print(f"DEBUG: Order response: {order}")
-        return order
-    except Exception as e:
-        print(f"❌ Sell order error: {type(e).__name__}: {e}")
-        print(f"DEBUG: Full error traceback: {str(e)}")
-        return None
-
 def check_pair(pair, symbol):
     """Check trading signals for a pair"""
     global balance, daily_pnl, positions, last_signal_candle
@@ -129,15 +202,16 @@ def check_pair(pair, symbol):
     try:
         # Fetch OHLCV data
         print(f"📊 Fetching {pair} data...")
-        ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=100)
+        klines = get_klines(symbol, interval='60', limit=100)
         
-        if not ohlcv or len(ohlcv) < VOLUME_PERIOD:
+        if not klines or len(klines) < VOLUME_PERIOD:
             print(f"⚠️ Not enough data for {pair}")
             return
         
-        prices = [x[4] for x in ohlcv]
-        volumes = [x[5] for x in ohlcv]
-        times = [x[0] for x in ohlcv]
+        # Parse klines: [timestamp, open, high, low, close, volume, ...]
+        prices = [float(x[4]) for x in klines]
+        volumes = [float(x[7]) for x in klines]  # Quote asset volume
+        times = [int(x[0]) for x in klines]
         
         current_time = times[-1]
         current_price = prices[-1]
@@ -171,7 +245,7 @@ def check_pair(pair, symbol):
             # TP HIT
             if current_price >= tp:
                 print(f"🟢 TP HIT for {pair}!")
-                sell_order = place_market_sell(symbol, size)
+                sell_order = place_order(symbol, 'Sell', size)
                 
                 if sell_order:
                     pnl = (current_price - entry) * size * LEVERAGE
@@ -221,7 +295,7 @@ Saat
             # SL HIT
             elif current_price <= sl:
                 print(f"🔴 SL HIT for {pair}!")
-                sell_order = place_market_sell(symbol, size)
+                sell_order = place_order(symbol, 'Sell', size)
                 
                 if sell_order:
                     pnl = (current_price - entry) * size * LEVERAGE
@@ -290,7 +364,7 @@ Saat
             print(f"💰 Position size: {position_size:.6f}")
             
             # Place buy order
-            buy_order = place_market_buy(symbol, position_size)
+            buy_order = place_order(symbol, 'Buy', position_size)
             
             if buy_order:
                 positions[pair] = {
@@ -300,7 +374,7 @@ Saat
                     'size': position_size,
                     'leverage': LEVERAGE,
                     'buy_time': current_time,
-                    'order_id': buy_order.get('id', 'unknown')
+                    'order_id': buy_order
                 }
                 last_signal_candle[pair] = current_time
                 save_state()
@@ -348,9 +422,9 @@ def main():
             print(f"\n⏰ Check at {get_time_utc3()}...")
             
             # Check both pairs
-            check_pair('ETH', 'ETH/USDT:USDT')
+            check_pair('ETH', 'ETHUSDT')
             time.sleep(2)
-            check_pair('BTC', 'BTC/USDT:USDT')
+            check_pair('BTC', 'BTCUSDT')
             
             print(f"✅ Check completed")
             
