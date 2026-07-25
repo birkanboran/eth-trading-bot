@@ -98,22 +98,28 @@ def place_market_buy(symbol, size):
     """Place market BUY order"""
     try:
         print(f"📤 Placing BUY order: {symbol} {size:.6f}")
+        print(f"DEBUG: Attempting to buy {size:.6f} {symbol}")
         order = exchange.create_market_buy_order(symbol, size)
         print(f"✅ BUY order placed: {order.get('id', 'unknown')}")
+        print(f"DEBUG: Order response: {order}")
         return order
     except Exception as e:
         print(f"❌ Buy order error: {type(e).__name__}: {e}")
+        print(f"DEBUG: Full error traceback: {str(e)}")
         return None
 
 def place_market_sell(symbol, size):
     """Place market SELL order"""
     try:
         print(f"📤 Placing SELL order: {symbol} {size:.6f}")
+        print(f"DEBUG: Attempting to sell {size:.6f} {symbol}")
         order = exchange.create_market_sell_order(symbol, size)
         print(f"✅ SELL order placed: {order.get('id', 'unknown')}")
+        print(f"DEBUG: Order response: {order}")
         return order
     except Exception as e:
         print(f"❌ Sell order error: {type(e).__name__}: {e}")
+        print(f"DEBUG: Full error traceback: {str(e)}")
         return None
 
 def check_pair(pair, symbol):
@@ -180,17 +186,35 @@ def check_pair(pair, symbol):
                     
                     msg = f"""🔴 SELL {pair}
 
-Giriş: ${entry:.2f}
-Çıkış: ${current_price:.2f}
-TP: ${tp:.2f}
-SL: ${sl:.2f}
+Giriş Fiyatı
+${entry:.2f}
 
-Sonuç: ✅ HEDEF TUTTU
-Kar: ${pnl:.2f}
-Bakiye: ${old_balance:.2f} → ${balance:.2f}
-Günlük: ${daily_pnl:.2f}
+Çıkış Fiyatı
+${current_price:.2f}
 
-Saat: {get_time_utc3()}"""
+Hedef (TP)
+${tp:.2f}
+
+Zarar Durdurma (SL)
+${sl:.2f}
+
+Pozisyon Boyutu
+{size:.6f} {pair}
+
+Sonuç
+✅ HEDEF TUTTU
+
+Kar/Zarar
+${pnl:.2f}
+
+Bakiye Değişimi
+${old_balance:.2f} → ${balance:.2f}
+
+Günlük Kar
+${daily_pnl:.2f}
+
+Saat
+{get_time_utc3()}"""
                     
                     send_telegram(msg)
             
@@ -212,17 +236,35 @@ Saat: {get_time_utc3()}"""
                     
                     msg = f"""🔴 SELL {pair}
 
-Giriş: ${entry:.2f}
-Çıkış: ${current_price:.2f}
-TP: ${tp:.2f}
-SL: ${sl:.2f}
+Giriş Fiyatı
+${entry:.2f}
 
-Sonuç: ❌ ZARAR DURDURMA
-Zarar: ${pnl:.2f}
-Bakiye: ${old_balance:.2f} → ${balance:.2f}
-Günlük: ${daily_pnl:.2f}
+Çıkış Fiyatı
+${current_price:.2f}
 
-Saat: {get_time_utc3()}"""
+Hedef (TP)
+${tp:.2f}
+
+Zarar Durdurma (SL)
+${sl:.2f}
+
+Pozisyon Boyutu
+{size:.6f} {pair}
+
+Sonuç
+❌ ZARAR DURDURMA
+
+Kar/Zarar
+${pnl:.2f}
+
+Bakiye Değişimi
+${old_balance:.2f} → ${balance:.2f}
+
+Günlük Kar
+${daily_pnl:.2f}
+
+Saat
+{get_time_utc3()}"""
                     
                     send_telegram(msg)
             return
@@ -265,14 +307,26 @@ Saat: {get_time_utc3()}"""
                 
                 msg = f"""🟢 BUY {pair}
 
-Giriş: ${entry_price:.2f}
-TP: ${tp_price:.2f}
-SL: ${sl_price:.2f}
-Boyut: {position_size:.6f}
-Kaldıraç: {LEVERAGE}x
+Giriş Fiyatı
+${entry_price:.2f}
 
-Bakiye: ${balance:.2f}
-Saat: {get_time_utc3()}"""
+Hedef (TP)
+${tp_price:.2f}
+
+Zarar Durdurma (SL)
+${sl_price:.2f}
+
+Pozisyon Boyutu
+{position_size:.6f} {pair}
+
+Kaldıraç
+{LEVERAGE}x
+
+Bakiye
+${balance:.2f}
+
+Saat
+{get_time_utc3()}"""
                 
                 send_telegram(msg)
     
