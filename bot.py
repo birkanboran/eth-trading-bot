@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Bybit ETH/BTC Perpetual Futures Trading Bot
+Bybit ETH/BTC Perpetual Futures Trading Bot - FIXED VERSION
 Strategy: Volume Spike Detection + Swing High/Low
-Real trading enabled with new API credentials
+Real trading enabled with error handling
 """
 import ccxt
 import asyncio
 import json
 import os
+import sys
 from telegram import Bot
 from datetime import datetime, timedelta, timezone
 
@@ -26,7 +27,7 @@ VOLUME_MULTIPLIER = 2
 VOLUME_PERIOD = 50
 
 # State file
-STATE_FILE = '/home/ubuntu/bot_state.json'
+STATE_FILE = '/tmp/bot_state.json'
 
 # ============ INITIALIZATION ============
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -35,9 +36,9 @@ exchange = ccxt.bybit({
     'apiKey': API_KEY,
     'secret': SECRET_KEY,
     'enableRateLimit': True,
-    'verify': False,
     'options': {
         'defaultType': 'swap',
+        'fetchBalance': 'v5',
     }
 })
 
@@ -85,26 +86,31 @@ async def send_telegram(msg):
     """Send message to Telegram"""
     try:
         await bot.send_message(chat_id=CHAT_ID, text=msg)
+        print(f"✅ Telegram sent")
     except Exception as e:
-        print(f"Telegram error: {e}")
+        print(f"❌ Telegram error: {e}")
 
 # ============ TRADING LOGIC ============
 async def place_market_buy(symbol, size):
     """Place market BUY order on Bybit"""
     try:
+        print(f"📤 Placing BUY order: {symbol} {size}")
         order = exchange.create_market_buy_order(symbol, size)
+        print(f"✅ BUY order placed: {order.get('id', 'unknown')}")
         return order
     except Exception as e:
-        print(f"Buy order error: {e}")
+        print(f"❌ Buy order error: {e}")
         return None
 
 async def place_market_sell(symbol, size):
     """Place market SELL order on Bybit"""
     try:
+        print(f"📤 Placing SELL order: {symbol} {size}")
         order = exchange.create_market_sell_order(symbol, size)
+        print(f"✅ SELL order placed: {order.get('id', 'unknown')}")
         return order
     except Exception as e:
-        print(f"Sell order error: {e}")
+        print(f"❌ Sell order error: {e}")
         return None
 
 async def check_pair(pair, symbol):
@@ -115,6 +121,7 @@ async def check_pair(pair, symbol):
         # Fetch OHLCV data
         ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=100)
         if not ohlcv or len(ohlcv) < VOLUME_PERIOD:
+            print(f"⚠️ Not enough data for {pair}")
             return
         
         prices = [x[4] for x in ohlcv]  # Close prices
@@ -124,16 +131,23 @@ async def check_pair(pair, symbol):
         current_time = times[-1]
         current_price = prices[-1]
         
+        print(f"📊 {pair}: Price=${current_price:.2f}, Volume={volumes[-1]:.0f}")
+        
         # Prevent duplicate signals from same candle
         if pair in last_signal_candle and last_signal_candle[pair] == current_time:
+            print(f"⏭️ {pair}: Skipping (same candle)")
             return
         
         # Calculate volume spike
         vol_avg = sum(volumes[-VOLUME_PERIOD:]) / VOLUME_PERIOD
         vol_spike = volumes[-1] > vol_avg * VOLUME_MULTIPLIER
         
+        print(f"📈 {pair}: Vol={volumes[-1]:.0f}, Avg={vol_avg:.0f}, Spike={vol_spike}")
+        
         # ========== BUY SIGNAL ==========
         if vol_spike and pair not in positions:
+            print(f"🟢 BUY SIGNAL for {pair}!")
+            
             entry_price = current_price
             tp_price = entry_price * (1 + TP_PERCENT / 100)
             sl_price = entry_price * (1 - SL_PERCENT / 100)
@@ -142,6 +156,8 @@ async def check_pair(pair, symbol):
             risk_amount = balance * (RISK_PERCENT / 100)
             price_diff = entry_price - sl_price
             position_size = risk_amount / (price_diff * LEVERAGE) if price_diff > 0 else 0.01
+            
+            print(f"💰 Position size: {position_size:.6f}")
             
             # Place buy order
             buy_order = await place_market_buy(symbol, position_size)
@@ -196,10 +212,12 @@ Saat
             
             # Prevent same-candle BUY/SELL
             if current_time == buy_time:
+                print(f"⏭️ {pair}: Skipping SELL (same candle)")
                 return
             
             # TP HIT
             if current_price >= tp:
+                print(f"🟢 TP HIT for {pair}!")
                 sell_order = await place_market_sell(symbol, size)
                 
                 if sell_order:
@@ -249,6 +267,7 @@ Saat
             
             # SL HIT
             elif current_price <= sl:
+                print(f"🔴 SL HIT for {pair}!")
                 sell_order = await place_market_sell(symbol, size)
                 
                 if sell_order:
@@ -297,28 +316,35 @@ Saat
                     await send_telegram(msg)
     
     except Exception as e:
-        print(f"Error checking {pair}: {e}")
+        print(f"❌ Error checking {pair}: {e}")
 
 # ============ MAIN LOOP ============
 async def main():
     """Main bot loop"""
     load_state()
-    print(f"Bot started. Initial balance: ${balance:.2f}")
+    print(f"🤖 Bot started. Initial balance: ${balance:.2f}")
     
     while True:
         try:
+            print(f"\n⏰ Checking at {get_time_utc3()}...")
+            
             # Check both pairs in parallel
             await asyncio.gather(
                 check_pair('ETH', 'ETH/USDT:USDT'),
                 check_pair('BTC', 'BTC/USDT:USDT')
             )
             
+            print(f"✅ Check completed. Sleeping 300s...")
             # Wait 5 minutes before next check
             await asyncio.sleep(300)
         
         except Exception as e:
-            print(f"Main loop error: {e}")
+            print(f"❌ Main loop error: {e}")
             await asyncio.sleep(300)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n🛑 Bot stopped")
+        sys.exit(0)
